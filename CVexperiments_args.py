@@ -1,3 +1,7 @@
+# author: Yifan Chen @ Caltech
+# date: 9/2021
+# email yifanc96@gmail.com
+
 ######
 # dataset, dataloader, data aug
     # name, batch size
@@ -17,6 +21,7 @@ import numpy as np
 import random
 import torch
 import datetime
+from time import time
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.utils.data.distributed import DistributedSampler
@@ -25,9 +30,6 @@ from tqdm import tqdm
 import math
 from tensorboardX import SummaryWriter
 
-
-
-    
 def get_parser():
     parser = argparse.ArgumentParser(description='PyTorch framework for NNs')
     # fundamental
@@ -37,7 +39,7 @@ def get_parser():
     
     # data
     parser.add_argument("--dataset", type=str, default="cifar100", choices=["cifar10","cifar100"])
-    parser.add_argument("--datafolder", type=str, default='./data/dataset/cifar100')
+    parser.add_argument("--datafolder", type=str, default='./data/dataset')
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--data_aug", type=bool, default=True)
@@ -67,23 +69,23 @@ def get_parser():
     parser.add_argument("--optim_warmup", type=int, default = 10)
     
     # log
-    parser.add_argument("--summarywriter", type=bool, default=True)
+    parser.add_argument("--logroot", type=str, default='./logs/')
     parser.add_argument("--writer_logroot", type=str, default='./tblogs/')
     parser.add_argument("--checkpoint_epochs", type=int, default=100)
-    parser.add_argument("--checkpoint_path", type=str, default="./results/")
     
     args = parser.parse_args()
     return args
 
-def set_random_seeds(random_seed=0):
+def set_random_seeds(args, logger=None):
+    random_seed = args.randomseed
     torch.manual_seed(random_seed)
     torch.backends.cudnn.deterministic = True
     # torch.backends.cudnn.benchmark = True
     np.random.seed(random_seed)
     random.seed(random_seed)
-    if args.log: logging.info(f"[Seeds] random seeds: {args.randomseed}")
+    if args.log: logger.info(f"[Seeds] random seeds: {args.randomseed}")
     
-def set_device(args):
+def set_device(args, logger):
     args.num_gpus = int(os.environ["WORLD_SIZE"]) if "WORLD_SIZE" in os.environ else 1
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     if args.device == 'cpu': args.num_gpus = 0
@@ -94,7 +96,7 @@ def set_device(args):
         torch.cuda.set_device(args.local_rank)
         args.device = torch.device("cuda", args.local_rank)
         torch.distributed.init_process_group(backend="nccl", init_method="env://")
-    logging.info(f"[Device] device: {args.device}, num_gpus: {args.num_gpus}, distributed: {args.distributed}") # log for all devices
+    logger.info(f"[Device] device: {args.device}, num_gpus: {args.num_gpus}, distributed: {args.distributed}") # log for all devices
     return args
 
 class set_data(object):
@@ -136,10 +138,10 @@ class set_data(object):
             ]
 
         augmentations = transforms.Compose(augmentations)
-        if args.log: logging.info(f"[Data] Dataset: {args.dataset}, path: {args.datafolder}, img_size: {args.img_size}, num_class: {args.num_classes}")
+        if args.log: logger.info(f"[Data] Dataset: {args.dataset}, path: {args.datafolder}, img_size: {args.img_size}, num_class: {args.num_classes}")
         return args, augmentations
     
-    def get_trainloader(self, augmentations, args):
+    def get_trainloader(self, augmentations, args, logger):
         train_dataset = datasets.__dict__[args.dataset.upper()](root = args.datafolder, train = True, download = True, transform = augmentations)
         
         if args.distributed:
@@ -148,7 +150,7 @@ class set_data(object):
         else:
             trainloader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
         
-        if args.log: logging.info(f"[DataLoader] batch size: {args.batch_size}, augmentation: {args.data_aug}, num_workers: {args.num_workers}")
+        if args.log: logger.info(f"[DataLoader] batch size: {args.batch_size}, augmentation: {args.data_aug}, num_workers: {args.num_workers}")
         return trainloader
     
     def get_testloader(self, args):
@@ -165,74 +167,89 @@ class set_data(object):
             num_workers=args.num_workers)
         return testloader
     
-def get_model(args):
+def get_model(args, logger):
     # for CCT
     model = models.__dict__[args.model](img_size=args.img_size, kernel_size=args.conv_size, n_input_channels=args.channels, num_classes=args.num_classes, embeding_dim=args.embed_dim, num_layers=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, n_conv_layers=args.conv_layer, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, positional_embedding='learnable')
     
-    if args.log: logging.info(f"[Model] name: {args.model}, conv-size: {args.conv_size}, conv-layer: {args.conv_layer}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
+    if args.log: logger.info(f"[Model] name: {args.model}, conv-size: {args.conv_size}, conv-layer: {args.conv_layer}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
     
     # additional info log
     tokenizer_params = sum(p.numel() for p in model.tokenizer.parameters() if p.requires_grad)
-    if args.log: logging.info(f'[Model] num of tokenizer parameters: {tokenizer_params}')
+    if args.log: logger.info(f'[Model] num of tokenizer parameters: {tokenizer_params}')
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    if args.log: logging.info(f'[Model] num of total trainable parameters: {total_params}')
+    if args.log: logger.info(f'[Model] num of total trainable parameters: {total_params}')
     sequence_length=model.tokenizer.sequence_length(n_channels=args.channels,
                                                            height=args.img_size,
                                                            width=args.img_size)
     if args.log: logging.info(f"[Model] token numbers: {sequence_length}")
     return model
 
-def get_loss(args):
+def get_loss(args, logger):
     if args.optim_loss == "cross_entropy":
         criterion = torch.nn.CrossEntropyLoss().to(args.device)
-        if args.log: logging.info(f"[Loss] {args.optim_loss}")
+        if args.log: logger.info(f"[Loss] {args.optim_loss}")
     elif args.optim_loss == "smooth_cross_entropy":
         from utils.losses import LabelSmoothingCrossEntropy
         criterion = LabelSmoothingCrossEntropy(smoothing=args.optim_loss_smoothing).to(args.device)
-        if args.log: logging.info(f"[Loss] {args.optim_loss}, smoothing: {args.optim_loss_smoothing}")
+        if args.log: logger.info(f"[Loss] {args.optim_loss}, smoothing: {args.optim_loss_smoothing}")
     return criterion
 
-def get_optimizer(model, args):
+def get_optimizer(model, args, logger):
     if args.optim_alg == "Adam":
         optimizer = torch.optim.Adam(model.parameters(), lr=args.optim_lr)
-        if args.log: logging.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}")
+        if args.log: logger.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}")
     elif args.optim_alg == "AdamW":
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.optim_lr,
                                   weight_decay=args.optim_wd)
-        if args.log: logging.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}, wd: {args.optim_wd}")
+        if args.log: logger.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}, wd: {args.optim_wd}")
     return optimizer
 
-def adjust_learning_rate(optimizer, epoch, args):
+def adjust_learning_rate(optimizer, epoch, args, logger):
     lr = args.optim_lr
     if hasattr(args, 'optim_warmup') and epoch < args.optim_warmup:
         lr = lr / (args.optim_warmup - epoch)
     elif args.optim_cosine:
-        lr *= 0.5 * (1. + math.cos(math.pi * (epoch - args.optim_warmup) / (args.train_num_epochs - args.optim_warmup)))
+        lr *= 0.5 * (1. + math.cos(math.pi * (epoch - args.optim_warmup) / (args.num_epochs - args.optim_warmup)))
 
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-class set_logger(object):
-    def __init__(self):
-        pass
-    
-    def logger(self, level = 'INFO'):
-        logging.getLogger().setLevel(logging.__dict__[level])
-        
-    def get_writer(self, args):
-        log_root = args.writer_logroot
-        log_name = args.model + '_' + args.dataset + '_' + args.optim_alg + '_'+ args.optim_loss + '_'+'b'+ str(args.batch_size)+ 'd' + str(args.num_layers) + 'e' + str(args.embed_dim) + 'h' + str(args.num_heads) + 'm' + str(int(args.mlp_ratio)) + 'sd' + str(args.drop_path_rate).replace(".","")
+class set_meter(object):
+    def __init__(self, args):
+        self.log_name = args.model + '_' + args.dataset + '_' + args.optim_alg + '_'+ args.optim_loss
+        self.log_para = 'b'+ str(args.batch_size)+ 'd' + str(args.num_layers) + 'e' + str(args.embed_dim) + 'h' + str(args.num_heads) + 'm' + str(int(args.mlp_ratio)) + 'sd' + str(args.drop_path_rate).replace(".","")
         if args.kinetic_lambda > 0.0:
-            log_name += '_k'+str(int(args.kinetic_lambda))
+            self.log_para += '_k'+str(int(args.kinetic_lambda))
         if args.layerscale > 0.0:
-            log_name += '_ls'+str(args.layerscale).replace(".","")
+            self.log_para += '_ls'+str(args.layerscale).replace(".","")
         date = str(datetime.datetime.now())
-        log_base = date[date.find("-"):date.rfind(".")].replace("-", "").replace(":", "").replace(" ", "_")
-        self.log_dir = os.path.join(log_root, log_name, log_base)
+        
+        self.log_base = date[date.find("-"):date.rfind(".")].replace("-", "").replace(":", "").replace(" ", "_")
+        
+    def logger(self, args, level = 'INFO'):
+        log_root = args.logroot
+        self.logdir = os.path.join(log_root, self.log_name)
+        os.makedirs(self.logdir, exist_ok=True)
+        filename = self.log_para + '_' + self.log_base + '.log'
+        
+        logging.basicConfig(
+        level=logging.__dict__[level],
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(self.logdir+'/'+filename),
+            logging.StreamHandler()]
+        )
+        logger=logging.getLogger()
+        return logger
+        
+    def get_writer(self, args, logger):
+        log_root = args.writer_logroot
+        
+        self.writer_logdir = os.path.join(log_root, self.log_name, self.log_para + '_' + self.log_base)
         
         if not args.distributed or args.local_rank == 0:
-            writer = SummaryWriter(self.log_dir)
-            if args.log: logging.info(f"[SummaryWriter] Directory: {meter.log_dir}")
+            writer = SummaryWriter(self.writer_logdir)
+            if args.log: logger.info(f"[SummaryWriter] Directory: {meter.writer_logdir}")
         return writer
     
     def set_hook(self, model, args):
@@ -257,7 +274,6 @@ class set_logger(object):
                 model.module.classifier.blocks_attn[iter_i].register_forward_hook(save_outputs_hook(iter_i))
                 model.module.classifier.blocks_MLP[iter_i].register_forward_hook(save_outputs_hook(iter_i+depth))
         return model
-    
     
 def train_one_epoch(model, trainloader, criterion, optimizer, meter, args):
     model.train()
@@ -306,83 +322,89 @@ def evaluate(model, testloader, criterion, meter, writer, args):
             acc = (output.argmax(dim=1) == target).float().mean()
             test_accuracy += acc / len(testloader)
             test_loss += loss.item() / len(testloader)
-            
-    for i in range(depth):
-        writer.add_scalar(f"attn_norm/depth{i}", x_norm[i],epoch)
-        writer.add_scalar(f"attn_cosim/depth{i}", cos_similarity[i],epoch)
-        writer.add_scalar(f"MLP_norm/depth{i}", x_norm[i+depth],epoch)
-        writer.add_scalar(f"MLP_cosim/depth{i}", cos_similarity[i+depth],epoch)
+    if writer is not None:
+        for i in range(depth):
+            writer.add_scalar(f"attn_norm/depth{i}", x_norm[i],epoch)
+            writer.add_scalar(f"attn_cosim/depth{i}", cos_similarity[i],epoch)
+            writer.add_scalar(f"MLP_norm/depth{i}", x_norm[i+depth],epoch)
+            writer.add_scalar(f"MLP_cosim/depth{i}", cos_similarity[i+depth],epoch)
     return test_loss, test_accuracy
 
-def store_checkpoint():
-    return None
+def store_checkpoint(epoch, meter, args):
+    args.checkpoint_path = meter.logdir+'/'+ meter.log_para + '_' + meter.log_base + '.pt'
+    torch.save({
+        'state_dict': model.state_dict(),
+        'epoch': epoch,
+        'train_acc': train_accs,
+        'test_acc': test_accs,
+        }, args.checkpoint_path) 
 
 
 if __name__ == '__main__':
-    
-    ## set logger
-    meter = set_logger()
-    meter.logger(level = 'INFO')
-    
     ## get argument parser
     args = get_parser()
     
+    ## set logger
+    meter = set_meter(args)
+    logger = meter.logger(args, level = 'INFO')
+    
     ## get device
-    args = set_device(args)
+    args = set_device(args, logger)
     args.log = not args.distributed or args.local_rank == 0
     
     ## set random seed
-    set_random_seeds(args.randomseed)
+    set_random_seeds(args, logger)
     
     ## get dateset and loader
     data = set_data()
+    args.datafolder = os.path.join(args.datafolder, args.dataset)
     args, augmentations = data.data_normalize_augment(args)
-    trainloader = data.get_trainloader(augmentations, args)
+    trainloader = data.get_trainloader(augmentations, args, logger)
     testloader = data.get_testloader(args)
     
     ## get model
-    model = get_model(args)
+    model = get_model(args, logger)
     model = model.to(args.device)
     
     ## get loss
-    criterion = get_loss(args)
+    criterion = get_loss(args, logger)
     
     ## get optimizer, scheduler
-    optimizer = get_optimizer(model, args)
+    optimizer = get_optimizer(model, args, logger)
+    logger.info(f"[Warm up] {args.optim_warmup} steps")
+    logger.info(f"[lr] cosine decay: {args.optim_cosine}")
     
     ## get SummaryWriter
-    writer = meter.get_writer(args)
+    writer = meter.get_writer(args, logger)
     model = meter.set_hook(model, args)
     
     ## training
     if args.log:
         train_accs = []
         test_accs = []
-
-    for epoch in range(args.num_epochs):
-        adjust_learning_rate(optimizer, epoch, args)
         
+    time_begin = time()
+    for epoch in range(args.num_epochs):
+        adjust_learning_rate(optimizer, epoch, args, logger)
         running_loss, running_accuracy = train_one_epoch(model, trainloader, criterion, optimizer, meter, args)
         if args.log: 
-            logging.info(f"Epoch : {epoch+1} - acc: {running_accuracy:.4f} - loss : {running_loss:.4f}\n")
+            logger.info(f"Epoch : {epoch+1} - acc: {running_accuracy:.4f} - loss : {running_loss:.4f}\n")
             train_accs.append(running_accuracy)
-            writer.add_scalar('training/training loss', running_loss, epoch)
-            writer.add_scalar('training/training accuracy', running_accuracy, epoch)
+            writer.add_scalar('training/training_loss', running_loss, epoch)
+            writer.add_scalar('training/training_accuracy', running_accuracy, epoch)
 
         if testloader is not None and args.log:
             test_loss, test_accuracy = evaluate(model, testloader, criterion, meter, writer, args)
-            logging.info(f"test acc: {test_accuracy:.4f} - test loss : {test_loss:.4f}\n")
+            logger.info(f"test acc: {test_accuracy:.4f} - test loss : {test_loss:.4f}\n")
             test_accs.append(test_accuracy)
-            writer.add_scalar('test/test loss', test_loss, epoch)
-            writer.add_scalar('test/test accuracy', test_accuracy, epoch)
-            
+            writer.add_scalar('test/test_loss', test_loss, epoch)
+            writer.add_scalar('test/test_accuracy', test_accuracy, epoch)
+        
+        total_mins = (time() - time_begin) / 60
+        logger.info(f'Script finished in {total_mins:.2f} minutes')
+        
         if (epoch+1)% args.checkpoint_epochs == 0 and args.log:
-            # torch.save(model.state_dict(), save_path)
-            torch.save({
-                'epoch': epoch,
-                'train_acc': train_accs,
-                'test_acc': test_accs,
-                }, args.checkpoint_path) 
+            store_checkpoint(epoch, meter, args)
     
     
     
