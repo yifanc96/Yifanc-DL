@@ -1,2 +1,2 @@
 # yifanc-DL
-yifan's code architecture for learning neural networks
+yifan's code architecture for learning neural networks; still in progress
