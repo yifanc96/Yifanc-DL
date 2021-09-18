@@ -339,7 +339,6 @@ def store_checkpoint(epoch, meter, args):
         'test_acc': test_accs,
         }, args.checkpoint_path) 
 
-
 if __name__ == '__main__':
     ## get argument parser
     args = get_parser()
@@ -371,8 +370,10 @@ if __name__ == '__main__':
     
     ## get optimizer, scheduler
     optimizer = get_optimizer(model, args, logger)
+    logger.info(f"[Kinetic Reg] {args.kinetic_lambda}")
     logger.info(f"[Warm up] {args.optim_warmup} steps")
     logger.info(f"[lr] cosine decay: {args.optim_cosine}")
+    logger.info(f"[Epochs] {args.num_epochs}")
     
     ## get SummaryWriter
     writer = meter.get_writer(args, logger)

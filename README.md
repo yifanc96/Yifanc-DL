@@ -1,2 +1,2 @@
-# DeepLearningEngine
-Prototypical code for Deep Learning
+# yifanc-DL
+yifan's code architecture for learning neural networks
