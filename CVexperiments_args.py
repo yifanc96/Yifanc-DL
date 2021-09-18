@@ -388,14 +388,14 @@ if __name__ == '__main__':
         adjust_learning_rate(optimizer, epoch, args, logger)
         running_loss, running_accuracy = train_one_epoch(model, trainloader, criterion, optimizer, meter, args)
         if args.log: 
-            logger.info(f"Epoch : {epoch+1} - acc: {running_accuracy:.4f} - loss : {running_loss:.4f}\n")
+            logger.info(f"Epoch : {epoch+1} - acc: {running_accuracy:.4f} - loss : {running_loss:.4f}")
             train_accs.append(running_accuracy)
             writer.add_scalar('training/training_loss', running_loss, epoch)
             writer.add_scalar('training/training_accuracy', running_accuracy, epoch)
 
         if testloader is not None and args.log:
             test_loss, test_accuracy = evaluate(model, testloader, criterion, meter, writer, args)
-            logger.info(f"test acc: {test_accuracy:.4f} - test loss : {test_loss:.4f}\n")
+            logger.info(f"test acc: {test_accuracy:.4f} - test loss : {test_loss:.4f}")
             test_accs.append(test_accuracy)
             writer.add_scalar('test/test_loss', test_loss, epoch)
             writer.add_scalar('test/test_accuracy', test_accuracy, epoch)
