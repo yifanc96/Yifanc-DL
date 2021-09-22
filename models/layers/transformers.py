@@ -77,7 +77,7 @@ class TransformerEncoderLayer_attn(Module):
     """
 
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
-                 attention_dropout=0.0, drop_path_rate=0.5, layerscale = 0.0):
+                 attention_dropout=0.0, drop_path_rate=0.5, layerscale = 0.0, train_scale = True):
         super(TransformerEncoderLayer_attn, self).__init__()
         self.pre_norm = LayerNorm(d_model)
         self.self_attn = Attention(dim=d_model, num_heads=nhead,
@@ -85,8 +85,12 @@ class TransformerEncoderLayer_attn(Module):
 
         self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0 else Identity()
         self.layerscale = layerscale
-        if layerscale > 0.0: 
-            self.gamma = nn.Parameter(layerscale * torch.ones((d_model)), requires_grad=True)
+        if layerscale > 0.0:
+            if train_scale:
+                self.gamma = nn.Parameter(layerscale * torch.ones((d_model)), requires_grad=True)
+            else:
+                self.gamma = nn.Parameter(layerscale * torch.ones((d_model)), requires_grad=False)
+                
     def forward(self, src: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         if self.layerscale > 0.0:
             src = src + self.drop_path(self.gamma * self.self_attn(self.pre_norm(src)))
@@ -100,7 +104,7 @@ class TransformerEncoderLayer_MLP(Module):
     """
 
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
-                 attention_dropout=0.0, drop_path_rate=0.5, layerscale = 0.0):
+                 attention_dropout=0.0, drop_path_rate=0.5, layerscale = 0.0, train_scale = True):
         super(TransformerEncoderLayer_MLP, self).__init__()
         self.linear1 = Linear(d_model, dim_feedforward)
         self.dropout1 = Dropout(dropout)
@@ -113,7 +117,11 @@ class TransformerEncoderLayer_MLP(Module):
         self.activation = F.gelu
         self.layerscale = layerscale
         if layerscale > 0.0: 
-            self.gamma = nn.Parameter(layerscale * torch.ones((d_model)), requires_grad=True)
+            if train_scale:
+                self.gamma = nn.Parameter(layerscale * torch.ones((d_model)), requires_grad=True)
+            else:
+                self.gamma = nn.Parameter(layerscale * torch.ones((d_model)), requires_grad=False)
+                
     def forward(self, src: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         src = self.norm1(src)
         src2 = self.linear2(self.dropout1(self.activation(self.linear1(src))))
@@ -167,6 +175,7 @@ class TransformerClassifier(Module):
                  positional_embedding='sine',
                  sequence_length=None,
                  layerscale = 0.0,
+                 train_scale = True,
                  *args, **kwargs):
         super().__init__()
         positional_embedding = positional_embedding if \
@@ -203,12 +212,12 @@ class TransformerClassifier(Module):
         self.blocks_attn = ModuleList([
             TransformerEncoderLayer_attn(d_model=embedding_dim, nhead=num_heads,
                                     dim_feedforward=dim_feedforward, dropout=dropout_rate,
-                                    attention_dropout=attention_dropout, drop_path_rate=dpr[i], layerscale = layerscale)
+                                    attention_dropout=attention_dropout, drop_path_rate=dpr[i], layerscale = layerscale, train_scale = train_scale)
             for i in range(num_layers)])
         self.blocks_MLP = ModuleList([
             TransformerEncoderLayer_MLP(d_model=embedding_dim, nhead=num_heads,
                                     dim_feedforward=dim_feedforward, dropout=dropout_rate,
-                                    attention_dropout=attention_dropout, drop_path_rate=dpr[i], layerscale = layerscale)
+                                    attention_dropout=attention_dropout, drop_path_rate=dpr[i], layerscale = layerscale, train_scale = train_scale)
             for i in range(num_layers)])
         self.depth = num_layers
         self.norm = LayerNorm(embedding_dim)

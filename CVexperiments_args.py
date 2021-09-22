@@ -53,6 +53,7 @@ def get_parser():
     parser.add_argument("--num_heads", type=int, default=4)
     parser.add_argument("--mlp_ratio", type=float, default=2.)
     parser.add_argument("--layerscale", type=float, default=0.0)
+    parser.add_argument("--train_scale", action='store_true')
     parser.add_argument("--attn_dropout_rate", type=float, default=0.1)
     parser.add_argument("--dropout_rate", type=float, default=0.0)
     parser.add_argument("--drop_path_rate", type=float, default=0.1)
@@ -65,7 +66,7 @@ def get_parser():
     parser.add_argument("--optim_alg", type=str, default="AdamW", choices = ["Adam","AdamW"])
     parser.add_argument("--optim_wd", type=float, default=3e-2)
     parser.add_argument("--optim_lr", type=float, default=0.0005)
-    parser.add_argument('--optim_cosine', type = bool, default = True)
+    parser.add_argument('--optim_cosine', action='store_true')
     parser.add_argument("--optim_warmup", type=int, default = 10)
     
     # log
@@ -169,9 +170,9 @@ class set_data(object):
     
 def get_model(args, logger):
     # for CCT
-    model = models.__dict__[args.model](img_size=args.img_size, kernel_size=args.conv_size, n_input_channels=args.channels, num_classes=args.num_classes, embeding_dim=args.embed_dim, num_layers=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, n_conv_layers=args.conv_layer, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, positional_embedding='learnable')
+    model = models.__dict__[args.model](img_size=args.img_size, kernel_size=args.conv_size, n_input_channels=args.channels, num_classes=args.num_classes, embeding_dim=args.embed_dim, num_layers=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, n_conv_layers=args.conv_layer, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, positional_embedding='learnable', train_scale = args.train_scale)
     
-    if args.log: logger.info(f"[Model] name: {args.model}, conv-size: {args.conv_size}, conv-layer: {args.conv_layer}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
+    if args.log: logger.info(f"[Model] name: {args.model}, conv-size: {args.conv_size}, conv-layer: {args.conv_layer}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
     
     # additional info log
     tokenizer_params = sum(p.numel() for p in model.tokenizer.parameters() if p.requires_grad)
@@ -196,10 +197,10 @@ def get_loss(args, logger):
 
 def get_optimizer(model, args, logger):
     if args.optim_alg == "Adam":
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.optim_lr)
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.optim_lr)
         if args.log: logger.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}")
     elif args.optim_alg == "AdamW":
-        optimizer = torch.optim.AdamW(model.parameters(), lr=args.optim_lr,
+        optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=args.optim_lr,
                                   weight_decay=args.optim_wd)
         if args.log: logger.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}, wd: {args.optim_wd}")
     return optimizer
@@ -393,6 +394,19 @@ if __name__ == '__main__':
             train_accs.append(running_accuracy)
             writer.add_scalar('training/training_loss', running_loss, epoch)
             writer.add_scalar('training/training_accuracy', running_accuracy, epoch)
+            # layerscale logs
+            if args.layerscale > 0.0:
+                depth = args.num_layers
+                for i in range(depth):
+                    if hasattr(model, 'classifier'):
+                        writer.add_scalar(f"attn_layerscale/depth{i}", model.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
+                        writer.add_scalar(f"mlp_layerscale/depth{i}", model.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                    else:
+                        writer.add_scalar(f"attn_layerscale/depth{i}", model.module.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
+                        writer.add_scalar(f"mlp_layerscale/depth{i}", model.module.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                        
+                    
+                    
 
         if testloader is not None and args.log:
             test_loss, test_accuracy = evaluate(model, testloader, criterion, meter, writer, args)

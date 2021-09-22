@@ -26,6 +26,7 @@ class CCT(nn.Module):
                  num_classes = 100,
                  mlp_ratio=2,
                  num_heads = 4,
+                 train_scale = True,
                  *args, **kwargs):
         super(CCT, self).__init__()
 
@@ -55,6 +56,7 @@ class CCT(nn.Module):
             mlp_ratio = mlp_ratio,
             num_heads = num_heads,
             num_layers = num_layers,
+            train_scale = train_scale,
             *args, **kwargs)
 
     def forward(self, x):
