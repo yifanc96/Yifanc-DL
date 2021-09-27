@@ -25,7 +25,8 @@ from time import time
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.utils.data.distributed import DistributedSampler
-import models.cct as models
+from models.cct import CCT
+from models.ViT_Attn_MLP_separate import VisionTransformer
 from tqdm import tqdm
 import math
 from tensorboardX import SummaryWriter
@@ -45,7 +46,7 @@ def get_parser():
     parser.add_argument("--data_aug", type=bool, default=True)
     
     # model: cct, ViT
-    parser.add_argument("--model", type=str, default="CCT")
+    parser.add_argument("--model", type=str, default="CCT", choice=["CCT","ViT"])
     parser.add_argument("--conv_size", type=int, default=3)
     parser.add_argument("--conv_layer", type=int, default=1)
     parser.add_argument("--embed_dim", type=int, default=256)
@@ -170,8 +171,11 @@ class set_data(object):
     
 def get_model(args, logger):
     # for CCT
-    model = models.__dict__[args.model](img_size=args.img_size, kernel_size=args.conv_size, n_input_channels=args.channels, num_classes=args.num_classes, embeding_dim=args.embed_dim, num_layers=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, n_conv_layers=args.conv_layer, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, positional_embedding='learnable', train_scale = args.train_scale)
-    
+    if args.model == "CCT":
+        model = CCT(img_size=args.img_size, kernel_size=args.conv_size, n_input_channels=args.channels, num_classes=args.num_classes, embeding_dim=args.embed_dim, num_layers=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, n_conv_layers=args.conv_layer, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, positional_embedding='learnable', train_scale = args.train_scale)
+    elif args.model == "ViT":
+         model = VisionTransformer(img_size=args.img_size, patch_size=args.conv_size, in_chans=args.channels, num_classes=args.num_classes, embeding_dim=args.embed_dim, depth=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, train_scale = args.train_scale)
+        
     if args.log: logger.info(f"[Model] name: {args.model}, conv-size: {args.conv_size}, conv-layer: {args.conv_layer}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
     
     # additional info log

@@ -12,10 +12,10 @@ from collections import OrderedDict
 import math
 
 # basic layers
-from ..copied_layers.patch_embed import PatchEmbed
-from ..copied_layers.drop import DropPath
-from ..copied_layers.mlp import Mlp
-from ..copied_layers.weight_init import trunc_normal_, lecun_normal_
+from layers.patch_embed import PatchEmbed
+from layers.drop import DropPath
+from layers.mlp import Mlp
+from layers.weight_init import trunc_normal_, lecun_normal_
 
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):
@@ -46,7 +46,7 @@ class Attention(nn.Module):
 class Block_attn(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, layerscale = 0.0):
+                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, layerscale = 0.0, train_scale = True):
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
@@ -55,7 +55,10 @@ class Block_attn(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.layerscale = layerscale
         if layerscale > 0.0: 
-            self.gamma = nn.Parameter(layerscale * torch.ones((dim)), requires_grad=True)
+            if train_scale:
+                self.gamma = nn.Parameter(layerscale * torch.ones((dim)), requires_grad=True)
+            else:
+                self.gamma = nn.Parameter(layerscale * torch.ones((dim)), requires_grad=False)
             
     def forward(self, x):
         if self.layerscale > 0.0: 
@@ -66,7 +69,7 @@ class Block_attn(nn.Module):
 
 class Block_MLP(nn.Module):
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, layerscale = 0.0):
+                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, layerscale = 0.0, train_scale = True):
         super().__init__()
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
@@ -74,7 +77,10 @@ class Block_MLP(nn.Module):
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
         self.layerscale = layerscale
         if layerscale > 0.0: 
-            self.gamma = nn.Parameter(layerscale * torch.ones((dim)), requires_grad=True)
+            if train_scale:
+                self.gamma = nn.Parameter(layerscale * torch.ones((dim)), requires_grad=True)
+            else:
+                self.gamma = nn.Parameter(layerscale * torch.ones((dim)), requires_grad=False)
 
     def forward(self, x):
         if self.layerscale > 0.0: 
@@ -95,7 +101,7 @@ class VisionTransformer(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
                  num_heads=12, mlp_ratio=4., qkv_bias=True, qk_scale=None, representation_size=None, distilled=False,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0., layerscale = 0.0, embed_layer=PatchEmbed, norm_layer=None,
-                 act_layer=None, weight_init=''):
+                 act_layer=None, weight_init='', train_scale = True):
         """
         Args:
             img_size (int, tuple): input image size
@@ -139,12 +145,12 @@ class VisionTransformer(nn.Module):
         self.blocks_attn = nn.ModuleList([
             Block_attn(
                 dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer, layerscale = layerscale)
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer, layerscale = layerscale, train_scale = train_scale)
             for i in range(depth)])
         self.blocks_MLP = nn.ModuleList([
             Block_MLP(
                 dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer, layerscale = layerscale)
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer, layerscale = layerscale, train_scale = train_scale)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
         # Representation layer
