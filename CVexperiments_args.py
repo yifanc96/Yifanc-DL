@@ -25,8 +25,10 @@ from time import time
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.utils.data.distributed import DistributedSampler
+
 from models.cct import CCT
 from models.ViT_Attn_MLP_separate import VisionTransformer
+
 from tqdm import tqdm
 import math
 from tensorboardX import SummaryWriter
@@ -46,7 +48,7 @@ def get_parser():
     parser.add_argument("--data_aug", type=bool, default=True)
     
     # model: cct, ViT
-    parser.add_argument("--model", type=str, default="CCT", choice=["CCT","ViT"])
+    parser.add_argument("--model", type=str, default="CCT", choices=["CCT","ViT"])
     parser.add_argument("--conv_size", type=int, default=3)
     parser.add_argument("--conv_layer", type=int, default=1)
     parser.add_argument("--embed_dim", type=int, default=256)
@@ -64,7 +66,7 @@ def get_parser():
     parser.add_argument("--kinetic_lambda", type=float, default = 0.0)
     parser.add_argument("--optim_loss", type=str, default="smooth_cross_entropy", choices=["cross_entropy", "smooth_cross_entropy"])
     parser.add_argument("--optim_loss_smoothing", type=float, default=0.1)
-    parser.add_argument("--optim_alg", type=str, default="AdamW", choices = ["Adam","AdamW"])
+    parser.add_argument("--optim_alg", type=str, default="AdamW", choices = ["Adam","AdamW","AdamL2"])
     parser.add_argument("--optim_wd", type=float, default=3e-2)
     parser.add_argument("--optim_lr", type=float, default=0.0005)
     parser.add_argument('--optim_cosine', action='store_true')
@@ -173,20 +175,27 @@ def get_model(args, logger):
     # for CCT
     if args.model == "CCT":
         model = CCT(img_size=args.img_size, kernel_size=args.conv_size, n_input_channels=args.channels, num_classes=args.num_classes, embeding_dim=args.embed_dim, num_layers=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, n_conv_layers=args.conv_layer, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, positional_embedding='learnable', train_scale = args.train_scale)
-    elif args.model == "ViT":
-         model = VisionTransformer(img_size=args.img_size, patch_size=args.conv_size, in_chans=args.channels, num_classes=args.num_classes, embeding_dim=args.embed_dim, depth=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, train_scale = args.train_scale)
+        if args.log: logger.info(f"[Model] name: {args.model}, conv-size: {args.conv_size}, conv-layer: {args.conv_layer}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
         
-    if args.log: logger.info(f"[Model] name: {args.model}, conv-size: {args.conv_size}, conv-layer: {args.conv_layer}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
-    
-    # additional info log
-    tokenizer_params = sum(p.numel() for p in model.tokenizer.parameters() if p.requires_grad)
-    if args.log: logger.info(f'[Model] num of tokenizer parameters: {tokenizer_params}')
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    if args.log: logger.info(f'[Model] num of total trainable parameters: {total_params}')
-    sequence_length=model.tokenizer.sequence_length(n_channels=args.channels,
-                                                           height=args.img_size,
-                                                           width=args.img_size)
-    if args.log: logging.info(f"[Model] token numbers: {sequence_length}")
+        # additional info log
+        tokenizer_params = sum(p.numel() for p in model.tokenizer.parameters() if p.requires_grad)
+        if args.log: logger.info(f'[Model] num of tokenizer parameters: {tokenizer_params}')
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        if args.log: logger.info(f'[Model] num of total trainable parameters: {total_params}')
+        sequence_length=model.tokenizer.sequence_length(n_channels=args.channels,
+                                                            height=args.img_size,
+                                                            width=args.img_size)
+        if args.log: logging.info(f"[Model] token numbers: {sequence_length}")
+    elif args.model == "ViT":
+         model = VisionTransformer(img_size=args.img_size, patch_size=args.conv_size, in_chans=args.channels, num_classes=args.num_classes, embed_dim=args.embed_dim, depth=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, train_scale = args.train_scale)
+         if args.log: logger.info(f"[Model] name: {args.model}, patch-size: {args.conv_size}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
+        # additional info log
+         total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+         if args.log: logger.info(f'[Model] num of total trainable parameters: {total_params}')
+         if args.log: logging.info(f"[Model] token numbers: {model.patch_embed.num_patches+1}")
+            
+    if args.distributed: 
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
     return model
 
 def get_loss(args, logger):
@@ -203,6 +212,9 @@ def get_optimizer(model, args, logger):
     if args.optim_alg == "Adam":
         optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.optim_lr)
         if args.log: logger.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}")
+    elif args.optim_alg == "AdamL2":
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.optim_lr, weight_decay=args.optim_wd)
+        if args.log: logger.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}, wd: {args.optim_wd}")
     elif args.optim_alg == "AdamW":
         optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=args.optim_lr,
                                   weight_decay=args.optim_wd)
@@ -222,11 +234,17 @@ def adjust_learning_rate(optimizer, epoch, args, logger):
 class set_meter(object):
     def __init__(self, args):
         self.log_name = args.model + '_' + args.dataset + '_' + args.optim_alg + '_'+ args.optim_loss
-        self.log_para = 'b'+ str(args.batch_size)+ 'd' + str(args.num_layers) + 'e' + str(args.embed_dim) + 'h' + str(args.num_heads) + 'm' + str(int(args.mlp_ratio)) + 'sd' + str(args.drop_path_rate).replace(".","")
+        self.log_para = 'b'+ str(args.batch_size)+ 'd' + str(args.num_layers) + 'e' + str(args.embed_dim) + 'h' + str(args.num_heads) + 'm' + str(int(args.mlp_ratio)) + 'sd' + str(args.drop_path_rate).replace(".","") + 'c' + str(args.conv_size)
         if args.kinetic_lambda > 0.0:
-            self.log_para += '_k'+str(int(args.kinetic_lambda))
+            self.log_para += '_k'+str(args.kinetic_lambda).replace(".","")
         if args.layerscale > 0.0:
             self.log_para += '_ls'+str(args.layerscale).replace(".","")
+            if args.train_scale:
+                self.log_para += 't'
+        if args.optim_cosine:
+            self.log_para += '_cos'
+        if args.optim_warmup > 0:
+            self.log_para += '_warm' + str(int(args.optim_warmup))
         date = str(datetime.datetime.now())
         
         self.log_base = date[date.find("-"):date.rfind(".")].replace("-", "").replace(":", "").replace(" ", "_")
@@ -271,13 +289,22 @@ class set_meter(object):
                 inres_sim = (input[0]*self.v_collect[layer_id]).sum(dim=(1,2))/(torch.norm(input[0], dim=(1,2))*torch.norm(output - input[0], dim=(1,2))+ 1e-5)
                 self.cosine_similarity[layer_id] = inres_sim.mean()
             return fn
-        for iter_i in range(depth):
-            if hasattr(model, 'classifier'):
-                model.classifier.blocks_attn[iter_i].register_forward_hook(save_outputs_hook(iter_i))
-                model.classifier.blocks_MLP[iter_i].register_forward_hook(save_outputs_hook(iter_i+depth))
-            else:
-                model.module.classifier.blocks_attn[iter_i].register_forward_hook(save_outputs_hook(iter_i))
-                model.module.classifier.blocks_MLP[iter_i].register_forward_hook(save_outputs_hook(iter_i+depth))
+        if args.model == "CCT":
+            for iter_i in range(depth):
+                if hasattr(model, 'classifier'):
+                    model.classifier.blocks_attn[iter_i].register_forward_hook(save_outputs_hook(iter_i))
+                    model.classifier.blocks_MLP[iter_i].register_forward_hook(save_outputs_hook(iter_i+depth))
+                else:
+                    model.module.classifier.blocks_attn[iter_i].register_forward_hook(save_outputs_hook(iter_i))
+                    model.module.classifier.blocks_MLP[iter_i].register_forward_hook(save_outputs_hook(iter_i+depth))
+        elif args.model == "ViT":
+            for iter_i in range(depth):
+                if hasattr(model, 'blocks_attn'):
+                    model.blocks_attn[iter_i].register_forward_hook(save_outputs_hook(iter_i))
+                    model.blocks_MLP[iter_i].register_forward_hook(save_outputs_hook(iter_i+depth))
+                else:
+                    model.module.blocks_attn[iter_i].register_forward_hook(save_outputs_hook(iter_i))
+                    model.module.blocks_MLP[iter_i].register_forward_hook(save_outputs_hook(iter_i+depth))
         return model
     
 def train_one_epoch(model, trainloader, criterion, optimizer, meter, args):
@@ -369,7 +396,7 @@ if __name__ == '__main__':
     ## get model
     model = get_model(args, logger)
     model = model.to(args.device)
-    
+    print(hasattr(model, 'blocks_attn'))
     ## get loss
     criterion = get_loss(args, logger)
     
@@ -401,13 +428,22 @@ if __name__ == '__main__':
             # layerscale logs
             if args.layerscale > 0.0:
                 depth = args.num_layers
-                for i in range(depth):
-                    if hasattr(model, 'classifier'):
-                        writer.add_scalar(f"attn_layerscale/depth{i}", model.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
-                        writer.add_scalar(f"mlp_layerscale/depth{i}", model.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
-                    else:
-                        writer.add_scalar(f"attn_layerscale/depth{i}", model.module.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
-                        writer.add_scalar(f"mlp_layerscale/depth{i}", model.module.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                if args.model == "CCT":
+                    for i in range(depth):
+                        if hasattr(model, 'classifier'):
+                            writer.add_scalar(f"attn_layerscale/depth{i}", model.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
+                            writer.add_scalar(f"mlp_layerscale/depth{i}", model.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                        else:
+                            writer.add_scalar(f"attn_layerscale/depth{i}", model.module.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
+                            writer.add_scalar(f"mlp_layerscale/depth{i}", model.module.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                elif args.model == "ViT":
+                    for i in range(depth):
+                        if hasattr(model, 'blocks_attn'):
+                            writer.add_scalar(f"attn_layerscale/depth{i}", model.blocks_attn[i].gamma.data.mean().item(),epoch)
+                            writer.add_scalar(f"mlp_layerscale/depth{i}", model.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                        else:
+                            writer.add_scalar(f"attn_layerscale/depth{i}", model.module.blocks_attn[i].gamma.data.mean().item(),epoch)
+                            writer.add_scalar(f"mlp_layerscale/depth{i}", model.module.blocks_MLP[i].gamma.data.mean().item(),epoch)
                         
                     
                     

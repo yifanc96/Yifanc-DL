@@ -12,10 +12,10 @@ from collections import OrderedDict
 import math
 
 # basic layers
-from layers.patch_embed import PatchEmbed
-from layers.drop import DropPath
-from layers.mlp import Mlp
-from layers.weight_init import trunc_normal_, lecun_normal_
+from .layers.patch_embed import PatchEmbed
+from .layers.drop import DropPath
+from .layers.mlp import Mlp
+from .layers.weight_init import trunc_normal_, lecun_normal_
 
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):
