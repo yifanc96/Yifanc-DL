@@ -267,20 +267,6 @@ class set_meter(object):
             logging.FileHandler(self.logdir+'/'+filename),
             logging.StreamHandler()]
         )
-    # def logger(self, args, level = 'INFO'):
-    #     log_root = args.logroot
-    #     self.logdir = os.path.join(log_root, self.log_name)
-    #     os.makedirs(self.logdir, exist_ok=True)
-    #     filename = self.log_para + '_' + self.log_base + '.log'
-    #     logging.basicConfig(
-    #     level=logging.__dict__[level],
-    #     format="%(asctime)s [%(levelname)s] %(message)s",
-    #     handlers=[
-    #         logging.FileHandler(self.logdir+'/'+filename),
-    #         logging.StreamHandler()]
-    #     )
-    #     logging=logging.getlogging()
-    #     return logging
         
     def get_writer(self, args):
         log_root = args.writer_logroot
