@@ -11,7 +11,7 @@
     # optim, scheduler (warmup)
 # evaluation
 # entry to distributed training
-# logger, SummaryWriter, checkpoint
+# logging, SummaryWriter, checkpoint
 ######
 
 import argparse
@@ -80,22 +80,20 @@ def get_parser():
     parser.add_argument("--checkpoint_epochs", type=int, default=100)
     
     args = parser.parse_args()
-    print(args.seq_pool)
-    
     if args.seq_pool == False and args.model == "CCT": 
         args.model = "CiT"
     return args
 
-def set_random_seeds(args, logger=None):
+def set_random_seeds(args):
     random_seed = args.randomseed
     torch.manual_seed(random_seed)
     torch.backends.cudnn.deterministic = True
     # torch.backends.cudnn.benchmark = True
     np.random.seed(random_seed)
     random.seed(random_seed)
-    if args.log: logger.info(f"[Seeds] random seeds: {args.randomseed}")
+    if args.log: logging.info(f"[Seeds] random seeds: {args.randomseed}")
     
-def set_device(args, logger):
+def set_device(args):
     args.num_gpus = int(os.environ["WORLD_SIZE"]) if "WORLD_SIZE" in os.environ else 1
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     if args.device == 'cpu': args.num_gpus = 0
@@ -106,7 +104,7 @@ def set_device(args, logger):
         torch.cuda.set_device(args.local_rank)
         args.device = torch.device("cuda", args.local_rank)
         torch.distributed.init_process_group(backend="nccl", init_method="env://")
-    logger.info(f"[Device] device: {args.device}, num_gpus: {args.num_gpus}, distributed: {args.distributed}") # log for all devices
+    logging.info(f"[Device] device: {args.device}, num_gpus: {args.num_gpus}, distributed: {args.distributed}") # log for all devices
     return args
 
 class set_data(object):
@@ -148,10 +146,10 @@ class set_data(object):
             ]
 
         augmentations = transforms.Compose(augmentations)
-        if args.log: logger.info(f"[Data] Dataset: {args.dataset}, path: {args.datafolder}, img_size: {args.img_size}, num_class: {args.num_classes}")
+        if args.log: logging.info(f"[Data] Dataset: {args.dataset}, path: {args.datafolder}, img_size: {args.img_size}, num_class: {args.num_classes}")
         return args, augmentations
     
-    def get_trainloader(self, augmentations, args, logger):
+    def get_trainloader(self, augmentations, args):
         train_dataset = datasets.__dict__[args.dataset.upper()](root = args.datafolder, train = True, download = True, transform = augmentations)
         
         if args.distributed:
@@ -160,7 +158,7 @@ class set_data(object):
         else:
             trainloader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
         
-        if args.log: logger.info(f"[DataLoader] batch size: {args.batch_size}, augmentation: {args.data_aug}, num_workers: {args.num_workers}")
+        if args.log: logging.info(f"[DataLoader] batch size: {args.batch_size}, augmentation: {args.data_aug}, num_workers: {args.num_workers}")
         return trainloader
     
     def get_testloader(self, args):
@@ -177,58 +175,58 @@ class set_data(object):
             num_workers=args.num_workers)
         return testloader
     
-def get_model(args, logger):
+def get_model(args):
     # for CCT
     if args.model == "CCT" or "CiT":
         model = CCT(img_size=args.img_size, kernel_size=args.conv_size, n_input_channels=args.channels, num_classes=args.num_classes, embeding_dim=args.embed_dim, num_layers=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, n_conv_layers=args.conv_layer, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, positional_embedding='learnable', train_scale = args.train_scale, seq_pool = args.seq_pool)
         
-        if args.log: logger.info(f"[Model] name: {args.model}, conv-size: {args.conv_size}, conv-layer: {args.conv_layer}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
+        if args.log: logging.info(f"[Model] name: {args.model}, conv-size: {args.conv_size}, conv-layer: {args.conv_layer}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
         
         # additional info log
         tokenizer_params = sum(p.numel() for p in model.tokenizer.parameters() if p.requires_grad)
-        if args.log: logger.info(f'[Model] num of tokenizer parameters: {tokenizer_params}')
+        if args.log: logging.info(f'[Model] num of tokenizer parameters: {tokenizer_params}')
         total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        if args.log: logger.info(f'[Model] num of total trainable parameters: {total_params}')
+        if args.log: logging.info(f'[Model] num of total trainable parameters: {total_params}')
         sequence_length=model.tokenizer.sequence_length(n_channels=args.channels,
                                                             height=args.img_size,
                                                             width=args.img_size)
         if args.log: logging.info(f"[Model] token numbers: {sequence_length}")
     elif args.model == "ViT":
          model = VisionTransformer(img_size=args.img_size, patch_size=args.conv_size, in_chans=args.channels, num_classes=args.num_classes, embed_dim=args.embed_dim, depth=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, train_scale = args.train_scale)
-         if args.log: logger.info(f"[Model] name: {args.model}, patch-size: {args.conv_size}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
+         if args.log: logging.info(f"[Model] name: {args.model}, patch-size: {args.conv_size}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
         # additional info log
          total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-         if args.log: logger.info(f'[Model] num of total trainable parameters: {total_params}')
+         if args.log: logging.info(f'[Model] num of total trainable parameters: {total_params}')
          if args.log: logging.info(f"[Model] token numbers: {model.patch_embed.num_patches+1}")
             
     if args.distributed: 
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
     return model
 
-def get_loss(args, logger):
+def get_loss(args):
     if args.optim_loss == "cross_entropy":
         criterion = torch.nn.CrossEntropyLoss().to(args.device)
-        if args.log: logger.info(f"[Loss] {args.optim_loss}")
+        if args.log: logging.info(f"[Loss] {args.optim_loss}")
     elif args.optim_loss == "smooth_cross_entropy":
         from utils.losses import LabelSmoothingCrossEntropy
         criterion = LabelSmoothingCrossEntropy(smoothing=args.optim_loss_smoothing).to(args.device)
-        if args.log: logger.info(f"[Loss] {args.optim_loss}, smoothing: {args.optim_loss_smoothing}")
+        if args.log: logging.info(f"[Loss] {args.optim_loss}, smoothing: {args.optim_loss_smoothing}")
     return criterion
 
-def get_optimizer(model, args, logger):
+def get_optimizer(model, args):
     if args.optim_alg == "Adam":
         optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.optim_lr)
-        if args.log: logger.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}")
+        if args.log: logging.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}")
     elif args.optim_alg == "AdamL2":
         optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.optim_lr, weight_decay=args.optim_wd)
-        if args.log: logger.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}, wd: {args.optim_wd}")
+        if args.log: logging.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}, wd: {args.optim_wd}")
     elif args.optim_alg == "AdamW":
         optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=args.optim_lr,
                                   weight_decay=args.optim_wd)
-        if args.log: logger.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}, wd: {args.optim_wd}")
+        if args.log: logging.info(f"[Optimizer] {args.optim_alg}, lr: {args.optim_lr}, wd: {args.optim_wd}")
     return optimizer
 
-def adjust_learning_rate(optimizer, epoch, args, logger):
+def adjust_learning_rate(optimizer, epoch, args):
     lr = args.optim_lr
     if hasattr(args, 'optim_warmup') and epoch < args.optim_warmup:
         lr = lr / (args.optim_warmup - epoch)
@@ -257,31 +255,41 @@ class set_meter(object):
         date = str(datetime.datetime.now())
         
         self.log_base = date[date.find("-"):date.rfind(".")].replace("-", "").replace(":", "").replace(" ", "_")
-        
+    
     def logger(self, args, level = 'INFO'):
         log_root = args.logroot
         self.logdir = os.path.join(log_root, self.log_name)
         os.makedirs(self.logdir, exist_ok=True)
         filename = self.log_para + '_' + self.log_base + '.log'
-        
-        logging.basicConfig(
-        level=logging.__dict__[level],
+        logging.basicConfig(level=logging.__dict__[level],
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.FileHandler(self.logdir+'/'+filename),
             logging.StreamHandler()]
         )
-        logger=logging.getLogger()
-        return logger
+    # def logger(self, args, level = 'INFO'):
+    #     log_root = args.logroot
+    #     self.logdir = os.path.join(log_root, self.log_name)
+    #     os.makedirs(self.logdir, exist_ok=True)
+    #     filename = self.log_para + '_' + self.log_base + '.log'
+    #     logging.basicConfig(
+    #     level=logging.__dict__[level],
+    #     format="%(asctime)s [%(levelname)s] %(message)s",
+    #     handlers=[
+    #         logging.FileHandler(self.logdir+'/'+filename),
+    #         logging.StreamHandler()]
+    #     )
+    #     logging=logging.getlogging()
+    #     return logging
         
-    def get_writer(self, args, logger):
+    def get_writer(self, args):
         log_root = args.writer_logroot
         
         self.writer_logdir = os.path.join(log_root, self.log_name, self.log_para + '_' + self.log_base)
         
         if not args.distributed or args.local_rank == 0:
             writer = SummaryWriter(self.writer_logdir)
-            if args.log: logger.info(f"[SummaryWriter] Directory: {meter.writer_logdir}")
+            if args.log: logging.info(f"[SummaryWriter] Directory: {meter.writer_logdir}")
         return writer
     
     def set_hook(self, model, args):
@@ -384,40 +392,41 @@ if __name__ == '__main__':
     ## get argument parser
     args = get_parser()
     
-    ## set logger
+    ## set logging
     meter = set_meter(args)
-    logger = meter.logger(args, level = 'INFO')
-    
+    meter.logger(args, level = 'INFO')
+    logging.info(f'argument is {args}')
     ## get device
-    args = set_device(args, logger)
+    args = set_device(args)
     args.log = not args.distributed or args.local_rank == 0
+    # only log the main process
     
     ## set random seed
-    set_random_seeds(args, logger)
+    set_random_seeds(args)
     
     ## get dateset and loader
     data = set_data()
     args.datafolder = os.path.join(args.datafolder, args.dataset)
     args, augmentations = data.data_normalize_augment(args)
-    trainloader = data.get_trainloader(augmentations, args, logger)
+    trainloader = data.get_trainloader(augmentations, args)
     testloader = data.get_testloader(args)
     
     ## get model
-    model = get_model(args, logger)
+    model = get_model(args)
     model = model.to(args.device)
     print(hasattr(model, 'blocks_attn'))
     ## get loss
-    criterion = get_loss(args, logger)
+    criterion = get_loss(args)
     
     ## get optimizer, scheduler
-    optimizer = get_optimizer(model, args, logger)
-    logger.info(f"[Kinetic Reg] {args.kinetic_lambda}")
-    logger.info(f"[Warm up] {args.optim_warmup} steps")
-    logger.info(f"[lr] cosine decay: {args.optim_cosine}")
-    logger.info(f"[Epochs] {args.num_epochs}")
+    optimizer = get_optimizer(model, args)
+    logging.info(f"[Kinetic Reg] {args.kinetic_lambda}")
+    logging.info(f"[Warm up] {args.optim_warmup} steps")
+    logging.info(f"[lr] cosine decay: {args.optim_cosine}")
+    logging.info(f"[Epochs] {args.num_epochs}")
     
     ## get SummaryWriter
-    writer = meter.get_writer(args, logger)
+    writer = meter.get_writer(args)
     model = meter.set_hook(model, args)
     
     ## training
@@ -427,11 +436,11 @@ if __name__ == '__main__':
         
     time_begin = time()
     for epoch in range(args.num_epochs):
-        adjust_learning_rate(optimizer, epoch, args, logger)
+        adjust_learning_rate(optimizer, epoch, args)
         
         running_loss, running_accuracy = train_one_epoch(model, trainloader, criterion, optimizer, meter, args)
         if args.log: 
-            logger.info(f"Epoch : {epoch+1} - acc: {running_accuracy:.4f} - loss : {running_loss:.4f}")
+            logging.info(f"Epoch : {epoch+1} - acc: {running_accuracy:.4f} - loss : {running_loss:.4f}")
             train_accs.append(running_accuracy)
             writer.add_scalar('training/training_loss', running_loss, epoch)
             writer.add_scalar('training/training_accuracy', running_accuracy, epoch)
@@ -484,13 +493,13 @@ if __name__ == '__main__':
 
         if testloader is not None and args.log:
             test_loss, test_accuracy = evaluate(model, testloader, criterion, meter, writer, args)
-            logger.info(f"test acc: {test_accuracy:.4f} - test loss : {test_loss:.4f}")
+            logging.info(f"test acc: {test_accuracy:.4f} - test loss : {test_loss:.4f}")
             test_accs.append(test_accuracy)
             writer.add_scalar('test/test_loss', test_loss, epoch)
             writer.add_scalar('test/test_accuracy', test_accuracy, epoch)
         
         total_mins = (time() - time_begin) / 60
-        logger.info(f'Script finished in {total_mins:.2f} minutes')
+        logging.info(f'Script finished in {total_mins:.2f} minutes')
         
         if (epoch+1)% args.checkpoint_epochs == 0 and args.log:
             store_checkpoint(epoch, meter, args)
