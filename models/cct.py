@@ -27,6 +27,7 @@ class CCT(nn.Module):
                  mlp_ratio=2,
                  num_heads = 4,
                  train_scale = True,
+                 seq_pool = True,
                  *args, **kwargs):
         super(CCT, self).__init__()
 
@@ -48,7 +49,7 @@ class CCT(nn.Module):
                                                            height=img_size,
                                                            width=img_size),
             embedding_dim=embedding_dim,
-            seq_pool=True,
+            seq_pool=seq_pool,
             dropout_rate=drop_rate,
             attention_dropout=attn_drop_rate,
             stochastic_depth=drop_path_rate, layerscale = layerscale, 

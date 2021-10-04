@@ -60,6 +60,8 @@ def get_parser():
     parser.add_argument("--attn_dropout_rate", type=float, default=0.1)
     parser.add_argument("--dropout_rate", type=float, default=0.0)
     parser.add_argument("--drop_path_rate", type=float, default=0.1)
+    parser.add_argument('--seq_pool', action='store_false')
+    parser.add_argument('--linearscale', action='store_true')
     
     # optim
     parser.add_argument("--num_epochs", type=int, default=200)
@@ -78,6 +80,10 @@ def get_parser():
     parser.add_argument("--checkpoint_epochs", type=int, default=100)
     
     args = parser.parse_args()
+    print(args.seq_pool)
+    
+    if args.seq_pool == False and args.model == "CCT": 
+        args.model = "CiT"
     return args
 
 def set_random_seeds(args, logger=None):
@@ -173,8 +179,9 @@ class set_data(object):
     
 def get_model(args, logger):
     # for CCT
-    if args.model == "CCT":
-        model = CCT(img_size=args.img_size, kernel_size=args.conv_size, n_input_channels=args.channels, num_classes=args.num_classes, embeding_dim=args.embed_dim, num_layers=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, n_conv_layers=args.conv_layer, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, positional_embedding='learnable', train_scale = args.train_scale)
+    if args.model == "CCT" or "CiT":
+        model = CCT(img_size=args.img_size, kernel_size=args.conv_size, n_input_channels=args.channels, num_classes=args.num_classes, embeding_dim=args.embed_dim, num_layers=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, n_conv_layers=args.conv_layer, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, positional_embedding='learnable', train_scale = args.train_scale, seq_pool = args.seq_pool)
+        
         if args.log: logger.info(f"[Model] name: {args.model}, conv-size: {args.conv_size}, conv-layer: {args.conv_layer}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
         
         # additional info log
@@ -241,6 +248,8 @@ class set_meter(object):
             self.log_para += '_ls'+str(args.layerscale).replace(".","")
             if args.train_scale:
                 self.log_para += 't'
+            elif args.linearscale:
+                self.log_para += 'lin'
         if args.optim_cosine:
             self.log_para += '_cos'
         if args.optim_warmup > 0:
@@ -289,7 +298,7 @@ class set_meter(object):
                 inres_sim = (input[0]*self.v_collect[layer_id]).sum(dim=(1,2))/(torch.norm(input[0], dim=(1,2))*torch.norm(output - input[0], dim=(1,2))+ 1e-5)
                 self.cosine_similarity[layer_id] = inres_sim.mean()
             return fn
-        if args.model == "CCT":
+        if args.model == "CCT" or "CiT":
             for iter_i in range(depth):
                 if hasattr(model, 'classifier'):
                     model.classifier.blocks_attn[iter_i].register_forward_hook(save_outputs_hook(iter_i))
@@ -419,6 +428,7 @@ if __name__ == '__main__':
     time_begin = time()
     for epoch in range(args.num_epochs):
         adjust_learning_rate(optimizer, epoch, args, logger)
+        
         running_loss, running_accuracy = train_one_epoch(model, trainloader, criterion, optimizer, meter, args)
         if args.log: 
             logger.info(f"Epoch : {epoch+1} - acc: {running_accuracy:.4f} - loss : {running_loss:.4f}")
@@ -428,22 +438,46 @@ if __name__ == '__main__':
             # layerscale logs
             if args.layerscale > 0.0:
                 depth = args.num_layers
-                if args.model == "CCT":
+                if args.model == "CCT" or "CiT":
                     for i in range(depth):
                         if hasattr(model, 'classifier'):
                             writer.add_scalar(f"attn_layerscale/depth{i}", model.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
                             writer.add_scalar(f"mlp_layerscale/depth{i}", model.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                            if args.linearscale and not args.train_scale:
+                                layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
+                                
+                                model.classifier.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                                model.classifier.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
                         else:
                             writer.add_scalar(f"attn_layerscale/depth{i}", model.module.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
                             writer.add_scalar(f"mlp_layerscale/depth{i}", model.module.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                            
+                            if args.linearscale and not args.train_scale:
+                                layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
+                                
+                                model.module.classifier.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                                model.module.classifier.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                                
                 elif args.model == "ViT":
                     for i in range(depth):
                         if hasattr(model, 'blocks_attn'):
                             writer.add_scalar(f"attn_layerscale/depth{i}", model.blocks_attn[i].gamma.data.mean().item(),epoch)
                             writer.add_scalar(f"mlp_layerscale/depth{i}", model.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                            
+                            if args.linearscale and not args.train_scale:
+                                layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
+                                
+                                model.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                                model.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                                
                         else:
                             writer.add_scalar(f"attn_layerscale/depth{i}", model.module.blocks_attn[i].gamma.data.mean().item(),epoch)
                             writer.add_scalar(f"mlp_layerscale/depth{i}", model.module.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                            if args.linearscale and not args.train_scale:
+                                layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
+                                
+                                model.module.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim),device = args.device)
+                                model.module.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim),device = args.device)    
                         
                     
                     
