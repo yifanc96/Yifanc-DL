@@ -374,6 +374,50 @@ def store_checkpoint(epoch, meter, args):
         'test_acc': test_accs,
         }, args.checkpoint_path) 
 
+def adjust_and_log_layerscale(epoch, model, args):
+    depth = args.num_layers
+    if args.model == "CCT" or "CiT":
+        for i in range(depth):
+            if hasattr(model, 'classifier'):
+                writer.add_scalar(f"attn_layerscale/depth{i}", model.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
+                writer.add_scalar(f"mlp_layerscale/depth{i}", model.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                if args.linearscale and not args.train_scale:
+                    layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
+                    
+                    model.classifier.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                    model.classifier.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+            else:
+                writer.add_scalar(f"attn_layerscale/depth{i}", model.module.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
+                writer.add_scalar(f"mlp_layerscale/depth{i}", model.module.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                
+                if args.linearscale and not args.train_scale:
+                    layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
+                    
+                    model.module.classifier.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                    model.module.classifier.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                    
+    elif args.model == "ViT":
+        for i in range(depth):
+            if hasattr(model, 'blocks_attn'):
+                writer.add_scalar(f"attn_layerscale/depth{i}", model.blocks_attn[i].gamma.data.mean().item(),epoch)
+                writer.add_scalar(f"mlp_layerscale/depth{i}", model.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                
+                if args.linearscale and not args.train_scale:
+                    layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
+                    
+                    model.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                    model.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                    
+            else:
+                writer.add_scalar(f"attn_layerscale/depth{i}", model.module.blocks_attn[i].gamma.data.mean().item(),epoch)
+                writer.add_scalar(f"mlp_layerscale/depth{i}", model.module.blocks_MLP[i].gamma.data.mean().item(),epoch)
+                if args.linearscale and not args.train_scale:
+                    layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
+                    
+                    model.module.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim),device = args.device)
+                    model.module.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim),device = args.device) 
+    return model
+
 if __name__ == '__main__':
     ## get argument parser
     args = get_parser()
@@ -422,61 +466,21 @@ if __name__ == '__main__':
         
     time_begin = time()
     for epoch in range(args.num_epochs):
+        # adjust learning rate
         adjust_learning_rate(optimizer, epoch, args)
         
+        # training
         running_loss, running_accuracy = train_one_epoch(model, trainloader, criterion, optimizer, meter, args)
         if args.log: 
             logging.info(f"Epoch : {epoch+1} - acc: {running_accuracy:.4f} - loss : {running_loss:.4f}")
             train_accs.append(running_accuracy)
             writer.add_scalar('training/training_loss', running_loss, epoch)
             writer.add_scalar('training/training_accuracy', running_accuracy, epoch)
-            # layerscale logs
+            # layerscale logs and adjustment
             if args.layerscale > 0.0:
-                depth = args.num_layers
-                if args.model == "CCT" or "CiT":
-                    for i in range(depth):
-                        if hasattr(model, 'classifier'):
-                            writer.add_scalar(f"attn_layerscale/depth{i}", model.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
-                            writer.add_scalar(f"mlp_layerscale/depth{i}", model.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
-                            if args.linearscale and not args.train_scale:
-                                layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
-                                
-                                model.classifier.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
-                                model.classifier.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
-                        else:
-                            writer.add_scalar(f"attn_layerscale/depth{i}", model.module.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
-                            writer.add_scalar(f"mlp_layerscale/depth{i}", model.module.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
-                            
-                            if args.linearscale and not args.train_scale:
-                                layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
-                                
-                                model.module.classifier.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
-                                model.module.classifier.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
-                                
-                elif args.model == "ViT":
-                    for i in range(depth):
-                        if hasattr(model, 'blocks_attn'):
-                            writer.add_scalar(f"attn_layerscale/depth{i}", model.blocks_attn[i].gamma.data.mean().item(),epoch)
-                            writer.add_scalar(f"mlp_layerscale/depth{i}", model.blocks_MLP[i].gamma.data.mean().item(),epoch)
-                            
-                            if args.linearscale and not args.train_scale:
-                                layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
-                                
-                                model.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
-                                model.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
-                                
-                        else:
-                            writer.add_scalar(f"attn_layerscale/depth{i}", model.module.blocks_attn[i].gamma.data.mean().item(),epoch)
-                            writer.add_scalar(f"mlp_layerscale/depth{i}", model.module.blocks_MLP[i].gamma.data.mean().item(),epoch)
-                            if args.linearscale and not args.train_scale:
-                                layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
-                                
-                                model.module.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim),device = args.device)
-                                model.module.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim),device = args.device)    
-                        
-                    
-                    
-
+                model = adjust_and_log_layerscale(epoch, model, args)
+        
+        # evaluate
         if testloader is not None and args.log:
             test_loss, test_accuracy = evaluate(model, testloader, criterion, meter, writer, args)
             logging.info(f"test acc: {test_accuracy:.4f} - test loss : {test_loss:.4f}")
@@ -484,9 +488,11 @@ if __name__ == '__main__':
             writer.add_scalar('test/test_loss', test_loss, epoch)
             writer.add_scalar('test/test_accuracy', test_accuracy, epoch)
         
+        # timer
         total_mins = (time() - time_begin) / 60
         logging.info(f'Script finished in {total_mins:.2f} minutes')
         
+        # checkpoint
         if (epoch+1)% args.checkpoint_epochs == 0 and args.log:
             store_checkpoint(epoch, meter, args)
     
