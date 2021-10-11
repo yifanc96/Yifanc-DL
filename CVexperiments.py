@@ -444,7 +444,7 @@ if __name__ == '__main__':
     ## get model
     model = get_model(args)
     model = model.to(args.device)
-    print(hasattr(model, 'blocks_attn'))
+    
     ## get loss
     criterion = get_loss(args)
     
