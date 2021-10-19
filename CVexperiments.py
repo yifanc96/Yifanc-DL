@@ -61,7 +61,7 @@ def get_parser():
     parser.add_argument("--dropout_rate", type=float, default=0.0)
     parser.add_argument("--drop_path_rate", type=float, default=0.1)
     parser.add_argument('--seq_pool', action='store_false')
-    parser.add_argument('--linearscale', action='store_true')
+    parser.add_argument('--linearscale', type=int, default = 10)
     
     # optim
     parser.add_argument("--num_epochs", type=int, default=200)
@@ -246,8 +246,8 @@ class set_meter(object):
             self.log_para += '_ls'+str(args.layerscale).replace(".","")
             if args.train_scale:
                 self.log_para += 't'
-            elif args.linearscale:
-                self.log_para += 'lin'
+            elif args.linearscale > 0:
+                self.log_para += 'lin' + str(args.linearscale)
         if args.optim_cosine:
             self.log_para += '_cos'
         if args.optim_warmup > 0:
@@ -382,19 +382,21 @@ def adjust_and_log_layerscale(epoch, model, args):
                 writer.add_scalar(f"attn_layerscale/depth{i}", model.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
                 writer.add_scalar(f"mlp_layerscale/depth{i}", model.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
                 if args.linearscale and not args.train_scale:
-                    layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
+                    if epoch < args.linearscale:
+                        layerscale = args.layerscale * (1-(epoch+1)/args.linearscale) + 1.0*((epoch+1)/args.linearscale)
                     
-                    model.classifier.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
-                    model.classifier.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                        model.classifier.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                        model.classifier.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
             else:
                 writer.add_scalar(f"attn_layerscale/depth{i}", model.module.classifier.blocks_attn[i].gamma.data.mean().item(),epoch)
                 writer.add_scalar(f"mlp_layerscale/depth{i}", model.module.classifier.blocks_MLP[i].gamma.data.mean().item(),epoch)
                 
                 if args.linearscale and not args.train_scale:
-                    layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
+                    if epoch < args.linearscale:
+                        layerscale = args.layerscale * (1-(epoch+1)/args.linearscale) + 1.0*((epoch+1)/args.linearscale)
                     
-                    model.module.classifier.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
-                    model.module.classifier.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                        model.module.classifier.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                        model.module.classifier.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
                     
     elif args.model == "ViT":
         for i in range(depth):
@@ -403,19 +405,21 @@ def adjust_and_log_layerscale(epoch, model, args):
                 writer.add_scalar(f"mlp_layerscale/depth{i}", model.blocks_MLP[i].gamma.data.mean().item(),epoch)
                 
                 if args.linearscale and not args.train_scale:
-                    layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
+                    if epoch < args.linearscale:
+                        layerscale = args.layerscale * (1-(epoch+1)/args.linearscale) + 1.0*((epoch+1)/args.linearscale)
                     
-                    model.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
-                    model.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                        model.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
+                        model.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim), device = args.device)
                     
             else:
                 writer.add_scalar(f"attn_layerscale/depth{i}", model.module.blocks_attn[i].gamma.data.mean().item(),epoch)
                 writer.add_scalar(f"mlp_layerscale/depth{i}", model.module.blocks_MLP[i].gamma.data.mean().item(),epoch)
                 if args.linearscale and not args.train_scale:
-                    layerscale = args.layerscale * (1-(epoch+1)/args.num_epochs) + 1.0*((epoch+1)/args.num_epochs)
+                    if epoch < args.linearscale:
+                        layerscale = args.layerscale * (1-(epoch+1)/args.linearscale) + 1.0*((epoch+1)/args.linearscale)
                     
-                    model.module.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim),device = args.device)
-                    model.module.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim),device = args.device) 
+                        model.module.blocks_attn[i].gamma.data = layerscale * torch.ones((args.embed_dim),device = args.device)
+                        model.module.blocks_MLP[i].gamma.data = layerscale * torch.ones((args.embed_dim),device = args.device) 
     return model
 
 if __name__ == '__main__':
