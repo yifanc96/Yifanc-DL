@@ -66,6 +66,7 @@ def get_parser():
     # optim
     parser.add_argument("--num_epochs", type=int, default=200)
     parser.add_argument("--kinetic_lambda", type=float, default = 0.0)
+    parser.add_argument("--norm_lambda", type=float, default = 0.0)
     parser.add_argument("--optim_loss", type=str, default="smooth_cross_entropy", choices=["cross_entropy", "smooth_cross_entropy"])
     parser.add_argument("--optim_loss_smoothing", type=float, default=0.1)
     parser.add_argument("--optim_alg", type=str, default="AdamW", choices = ["Adam","AdamW","AdamL2"])
@@ -177,7 +178,7 @@ class set_data(object):
     
 def get_model(args):
     # for CCT
-    if args.model == "CCT" or "CiT":
+    if args.model == "CCT" or args.model == "CiT":
         model = CCT(img_size=args.img_size, kernel_size=args.conv_size, n_input_channels=args.channels, num_classes=args.num_classes, embeding_dim=args.embed_dim, num_layers=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, n_conv_layers=args.conv_layer, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, positional_embedding='learnable', train_scale = args.train_scale, seq_pool = args.seq_pool)
         
         if args.log: logging.info(f"[Model] name: {args.model}, conv-size: {args.conv_size}, conv-layer: {args.conv_layer}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
@@ -192,12 +193,12 @@ def get_model(args):
                                                             width=args.img_size)
         if args.log: logging.info(f"[Model] token numbers: {sequence_length}")
     elif args.model == "ViT":
-         model = VisionTransformer(img_size=args.img_size, patch_size=args.conv_size, in_chans=args.channels, num_classes=args.num_classes, embed_dim=args.embed_dim, depth=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, train_scale = args.train_scale)
-         if args.log: logging.info(f"[Model] name: {args.model}, patch-size: {args.conv_size}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
+        model = VisionTransformer(img_size=args.img_size, patch_size=args.conv_size, in_chans=args.channels, num_classes=args.num_classes, embed_dim=args.embed_dim, depth=args.num_layers,num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, drop_rate=args.dropout_rate, attn_drop_rate=args.attn_dropout_rate, drop_path_rate=args.drop_path_rate, layerscale = args.layerscale, train_scale = args.train_scale)
+        if args.log: logging.info(f"[Model] name: {args.model}, patch-size: {args.conv_size}, embed_dim: {args.embed_dim}, num_layers: {args.num_layers}, num_heads: {args.num_heads}, mlp_ratio: {args.mlp_ratio}, layerscale:{args.layerscale}, train_scale: {args.train_scale}, attn_dropout_rate: {args.attn_dropout_rate}, dropout_rate: {args.dropout_rate}, drop_path_rate: {args.drop_path_rate}")
         # additional info log
-         total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-         if args.log: logging.info(f'[Model] num of total trainable parameters: {total_params}')
-         if args.log: logging.info(f"[Model] token numbers: {model.patch_embed.num_patches+1}")
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        if args.log: logging.info(f'[Model] num of total trainable parameters: {total_params}')
+        if args.log: logging.info(f"[Model] token numbers: {model.patch_embed.num_patches+1}")
             
     if args.distributed: 
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
@@ -242,6 +243,8 @@ class set_meter(object):
         self.log_para = 'b'+ str(args.batch_size)+ 'd' + str(args.num_layers) + 'e' + str(args.embed_dim) + 'h' + str(args.num_heads) + 'm' + str(int(args.mlp_ratio)) + 'sd' + str(args.drop_path_rate).replace(".","") + 'c' + str(args.conv_size)
         if args.kinetic_lambda > 0.0:
             self.log_para += '_k'+str(args.kinetic_lambda).replace(".","")
+        if args.norm_lambda > 0.0:
+            self.log_para += '_n'+str(args.norm_lambda).replace(".","")
         if args.layerscale > 0.0:
             self.log_para += '_ls'+str(args.layerscale).replace(".","")
             if args.train_scale:
@@ -285,6 +288,8 @@ class set_meter(object):
         # save the norm of outputs of each layer
         self.x_norm_collect = [torch.empty(0, device = args.device) for i in range(2*depth)]
         self.cosine_similarity = [torch.empty(0, device = args.device) for i in range(2*depth)]
+        
+        self.x_last = torch.empty(0, device = args.device)
         def save_outputs_hook(layer_id):
             def fn(_, input, output):
                 self.v_collect[layer_id] = output - input[0]
@@ -292,22 +297,37 @@ class set_meter(object):
                 inres_sim = (input[0]*self.v_collect[layer_id]).sum(dim=(1,2))/(torch.norm(input[0], dim=(1,2))*torch.norm(output - input[0], dim=(1,2))+ 1e-5)
                 self.cosine_similarity[layer_id] = inres_sim.mean()
             return fn
-        if args.model == "CCT" or "CiT":
+
+        def save_x_last_hook():
+            def fn(_, input, output):
+                self.x_last = output
+            return fn
+                
+        if args.model == "CCT" or args.model == "CiT":
             for iter_i in range(depth):
                 if hasattr(model, 'classifier'):
                     model.classifier.blocks_attn[iter_i].register_forward_hook(save_outputs_hook(iter_i))
                     model.classifier.blocks_MLP[iter_i].register_forward_hook(save_outputs_hook(iter_i+depth))
+                    if iter_i == depth - 1:
+                        model.classifier.blocks_MLP[iter_i].register_forward_hook(save_x_last_hook())
                 else:
                     model.module.classifier.blocks_attn[iter_i].register_forward_hook(save_outputs_hook(iter_i))
                     model.module.classifier.blocks_MLP[iter_i].register_forward_hook(save_outputs_hook(iter_i+depth))
+                    if iter_i == depth - 1:
+                        model.module.classifier.blocks_MLP[iter_i].register_forward_hook(save_x_last_hook())
+            
         elif args.model == "ViT":
             for iter_i in range(depth):
                 if hasattr(model, 'blocks_attn'):
                     model.blocks_attn[iter_i].register_forward_hook(save_outputs_hook(iter_i))
                     model.blocks_MLP[iter_i].register_forward_hook(save_outputs_hook(iter_i+depth))
+                    if iter_i == depth - 1:
+                        model.blocks_MLP[iter_i].register_forward_hook(save_x_last_hook())
                 else:
                     model.module.blocks_attn[iter_i].register_forward_hook(save_outputs_hook(iter_i))
                     model.module.blocks_MLP[iter_i].register_forward_hook(save_outputs_hook(iter_i+depth))
+                    if iter_i == depth - 1:
+                        model.module.blocks_MLP[iter_i].register_forward_hook(save_x_last_hook())
         return model
     
 def train_one_epoch(model, trainloader, criterion, optimizer, meter, args):
@@ -324,7 +344,8 @@ def train_one_epoch(model, trainloader, criterion, optimizer, meter, args):
         output = model(data)
         
         transport = args.kinetic_lambda * sum([torch.mean(v ** 2) for v in meter.v_collect])
-        loss = criterion(output, target) + transport
+        norm_penalty = args.norm_lambda *torch.mean(meter.x_last ** 2)
+        loss = criterion(output, target) + transport + norm_penalty
         
         optimizer.zero_grad()
         loss.backward()
@@ -455,6 +476,7 @@ if __name__ == '__main__':
     ## get optimizer, scheduler
     optimizer = get_optimizer(model, args)
     logging.info(f"[Kinetic Reg] {args.kinetic_lambda}")
+    logging.info(f"[Norm Reg] {args.norm_lambda}")
     logging.info(f"[Warm up] {args.optim_warmup} steps")
     logging.info(f"[lr] cosine decay: {args.optim_cosine}")
     logging.info(f"[Epochs] {args.num_epochs}")
